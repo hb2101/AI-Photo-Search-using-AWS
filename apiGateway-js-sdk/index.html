@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Photo Album App</title>
+</head>
+<body>
+    <h1>Photo Album Application</h1>
+
+    <!-- Section for searching photos -->
+    <h2>Search Photos</h2>
+    <input type="text" id="searchQuery" placeholder="Enter keywords (e.g., cat, dog)">
+    <button onclick="searchPhotos()">Search</button>
+
+    <div id="searchResults"></div>
+
+    <hr>
+
+    <!-- Section for uploading photos -->
+    <h2>Upload Photo</h2>
+    <input type="file" id="uploadFile"><br><br>
+    <input type="text" id="customLabels" placeholder="Enter custom labels (comma separated)">
+    <br><br>
+    <button onclick="uploadPhoto()">Upload</button>
+
+    <div id="uploadStatus"></div>
+
+    <!-- SDK Scripts -->
+    <script src="apigClient.js"></script>
+    <script src="lib/axios/dist/axios.standalone.js"></script>
+    <script src="lib/CryptoJS/rollups/hmac-sha256.js"></script>
+    <script src="lib/CryptoJS/rollups/sha256.js"></script>
+    <script src="lib/CryptoJS/components/hmac.js"></script>
+    <script src="lib/CryptoJS/components/enc-base64.js"></script>
+    <script src="lib/url-template/url-template.js"></script>
+    <script src="lib/apiGatewayCore/sigV4Client.js"></script>
+    <script src="lib/apiGatewayCore/apiGatewayClient.js"></script>
+    <script src="lib/apiGatewayCore/simpleHttpClient.js"></script>
+    <script src="lib/apiGatewayCore/utils.js"></script>
+
+    <script>
+        // Initialize the API client
+        var apigClient = apigClientFactory.newClient({
+            apiKey:'KeX0NV6sfX14XZs7mbgYK7ohVHsD4Mvi4Awuo4xU'
+        });
+
+        // Function to search for photos
+        function searchPhotos() {
+            const query = document.getElementById('searchQuery').value.trim();
+
+            if (!query) {
+                alert("Please enter a search term.");
+                return;
+            }
+
+            apigClient.searchGet({
+                'q': query
+            }, {}, {})
+            .then(function(response) {
+                console.log(response);
+                displaySearchResults(response.data);
+            })
+            .catch(function(error) {
+                console.error("Error searching photos:", error);
+                alert("Failed to search photos.");
+            });
+        }
+
+        // Function to display search results
+        function displaySearchResults(photos) {
+            const container = document.getElementById('searchResults');
+            container.innerHTML = "";
+
+            if (photos.length === 0) {
+                container.innerHTML = "<p>No matching photos found.</p>";
+                return;
+            }
+
+            photos.forEach(photo => {
+                const img = document.createElement('img');
+                img.src = photo.url;
+                img.alt = "Photo";
+                img.width = 200;
+                img.style.margin = "10px";
+                container.appendChild(img);
+            });
+        }
+
+        // Function to upload photo
+        function uploadPhoto() {
+            const fileInput = document.getElementById('uploadFile');
+            const labelsInput = document.getElementById('customLabels');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("Please select a file to upload.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const binaryData = event.target.result;
+
+                apigClient.photosPut({
+                    'object': file.name
+                }, binaryData, {
+                    headers: {
+                        'Content-Type': file.type,
+                        'x-amz-meta-customLabels': labelsInput.value
+                    }
+                })
+                .then(function(response) {
+                    console.log(response);
+                    document.getElementById('uploadStatus').innerHTML = "Upload successful!";
+                })
+                .catch(function(error) {
+                    console.error("Error uploading photo:", error);
+                    document.getElementById('uploadStatus').innerHTML = "Upload failed.";
+                });
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+    </script>
+</body>
+</html>
