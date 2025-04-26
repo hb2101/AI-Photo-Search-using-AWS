@@ -1,0 +1,136 @@
+import json
+import boto3
+import urllib3
+import base64
+
+region = 'us-east-1'
+host = 'search-photos-2qrt2dmuwhxmm5j2xxe7exnu4y.us-east-1.es.amazonaws.com'
+index = 'photos'
+http = urllib3.PoolManager()
+
+username = 'hetal'
+password = 'Hetal21@'
+
+auth_string = f"{username}:{password}"
+encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+basic_auth_headers = {
+    'Content-Type': 'application/json',
+    'Authorization': f"Basic {encoded_auth}"
+}
+
+def lambda_handler(event, context):
+    print("Event:", json.dumps(event))
+    
+    # Detect if request comes from API Gateway or Lex
+    if 'queryStringParameters' in event:
+        query = event.get('queryStringParameters', {}).get('q', '')
+        return handle_api_gateway(query)
+    else:
+        return handle_lex(event)
+
+def handle_api_gateway(query):
+    print("API Gateway query:", query)
+
+    if not query:
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps([])
+        }
+    
+    keywords = [word.strip().lower() for word in query.split()]
+    photos = search_photos(keywords)
+
+    results = [
+        {
+            "url": f"https://photo-album-bucket-hetal.s3.amazonaws.com/{photo['objectKey']}",
+            "labels": photo['labels']
+        } for photo in photos
+    ]
+
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(results)
+    }
+
+def handle_lex(event):
+    print("Lex input event:", json.dumps(event))
+
+    keywords = []
+    slots = event.get('sessionState', {}).get('intent', {}).get('slots', {})
+    if slots and 'Label' in slots:
+        label_value = slots['Label'].get('value', {}).get('interpretedValue')
+        if label_value:
+            keywords = [label_value.lower()]
+
+    if not keywords and 'inputTranscript' in event:
+        query = event['inputTranscript']
+        keywords = [word.strip().lower() for word in query.split() if word.strip()]
+
+    print("Extracted keywords:", keywords)
+
+    if not keywords:
+        return build_lex_response([], event, message="No keywords found.")
+
+    photos = search_photos(keywords)
+
+    if photos:
+        names = ', '.join([p.get("objectKey", "photo") for p in photos])
+        message = f"Found {len(photos)} photo(s): {names}"
+    else:
+        message = "No matching photos found."
+
+    return build_lex_response(photos, event, message)
+
+def search_photos(keywords):
+    search_query = {
+        "query": {
+            "bool": {
+                "should": [
+                    {"match_phrase": {"labels": keyword}} for keyword in keywords
+                ],
+                "minimum_should_match": 1
+            }
+        }
+    }
+
+    print("Full OpenSearch query sent:", json.dumps(search_query))
+
+    response = http.request(
+        'GET',
+        f'https://{host}/{index}/_search',
+        body=json.dumps(search_query),
+        headers=basic_auth_headers
+    )
+
+    raw_response = response.data.decode("utf-8")
+    print("Raw OpenSearch response:", raw_response)
+
+    result = json.loads(raw_response)
+    hits = result.get('hits', {}).get('hits', [])
+    photos = [hit['_source'] for hit in hits]
+    print("Photos found:", photos)
+
+    return photos
+
+def build_lex_response(photos, event, message):
+    return {
+        "sessionState": {
+            "dialogAction": {
+                "type": "Close"
+            },
+            "intent": {
+                "name": "SearchIntent",
+                "state": "Fulfilled"
+            }
+        },
+        "messages": [
+            {
+                "contentType": "PlainText",
+                "content": message
+            }
+        ],
+        "sessionId": event.get("sessionId", "default-session"),
+        "requestAttributes": event.get("requestAttributes", {}),
+    }
