@@ -8,6 +8,7 @@ host = 'search-photos-2qrt2dmuwhxmm5j2xxe7exnu4y.us-east-1.es.amazonaws.com'
 index = 'photos'
 http = urllib3.PoolManager()
 
+# Basic auth credentials (for OpenSearch)
 username = 'hetal'
 password = 'Hetal21@'
 
@@ -21,12 +22,22 @@ basic_auth_headers = {
 def lambda_handler(event, context):
     print("Event:", json.dumps(event))
     
-    # Detect if request comes from API Gateway or Lex
-    if 'queryStringParameters' in event:
-        query = event.get('queryStringParameters', {}).get('q', '')
-        return handle_api_gateway(query)
-    else:
-        return handle_lex(event)
+    try:
+        if 'queryStringParameters' in event:
+            query = event.get('queryStringParameters', {}).get('q', '')
+            return handle_api_gateway(query)
+        else:
+            return handle_lex(event)
+    except Exception as e:
+        print("Unhandled exception:", str(e))
+        return {
+            "statusCode": 500,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            },
+            "body": json.dumps({"error": "Internal Server Error", "message": str(e)})
+        }
 
 def handle_api_gateway(query):
     print("API Gateway query:", query)
@@ -34,11 +45,14 @@ def handle_api_gateway(query):
     if not query:
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            },
             "body": json.dumps([])
         }
     
-    keywords = [word.strip().lower() for word in query.split()]
+    keywords = [word.strip().lower() for word in query.split() if word.strip()]
     photos = search_photos(keywords)
 
     results = [
@@ -50,7 +64,10 @@ def handle_api_gateway(query):
 
     return {
         "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+        },
         "body": json.dumps(results)
     }
 
@@ -97,22 +114,26 @@ def search_photos(keywords):
 
     print("Full OpenSearch query sent:", json.dumps(search_query))
 
-    response = http.request(
-        'GET',
-        f'https://{host}/{index}/_search',
-        body=json.dumps(search_query),
-        headers=basic_auth_headers
-    )
+    try:
+        response = http.request(
+            'GET',
+            f'https://{host}/{index}/_search',
+            body=json.dumps(search_query),
+            headers=basic_auth_headers
+        )
+        raw_response = response.data.decode("utf-8")
+        print("Raw OpenSearch response:", raw_response)
 
-    raw_response = response.data.decode("utf-8")
-    print("Raw OpenSearch response:", raw_response)
+        result = json.loads(raw_response)
+        hits = result.get('hits', {}).get('hits', [])
+        photos = [hit['_source'] for hit in hits]
+        print("Photos found:", photos)
 
-    result = json.loads(raw_response)
-    hits = result.get('hits', {}).get('hits', [])
-    photos = [hit['_source'] for hit in hits]
-    print("Photos found:", photos)
-
-    return photos
+        return photos
+    
+    except Exception as e:
+        print("Error searching OpenSearch:", str(e))
+        return []
 
 def build_lex_response(photos, event, message):
     return {
