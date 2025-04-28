@@ -3,12 +3,13 @@ import boto3
 import urllib3
 import base64
 
+# AWS setup
 region = 'us-east-1'
 host = 'search-photos-2qrt2dmuwhxmm5j2xxe7exnu4y.us-east-1.es.amazonaws.com'
 index = 'photos'
 http = urllib3.PoolManager()
 
-# Basic auth credentials (for OpenSearch)
+# Basic auth for OpenSearch
 username = 'hetal'
 password = 'Hetal21@'
 
@@ -20,38 +21,48 @@ basic_auth_headers = {
 }
 
 def lambda_handler(event, context):
-    print("Event:", json.dumps(event))
-    
+    print("Event received:", json.dumps(event))
+
     try:
+        if event.get('httpMethod', '') == 'OPTIONS':
+            return build_cors_response(200, {"message": "CORS preflight success"})
+
         if 'queryStringParameters' in event:
             query = event.get('queryStringParameters', {}).get('q', '')
-            return handle_api_gateway(query)
+            response = handle_api_gateway(query)
         else:
-            return handle_lex(event)
+            response = handle_lex(event)
+
     except Exception as e:
         print("Unhandled exception:", str(e))
-        return {
-            "statusCode": 500,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            },
-            "body": json.dumps({"error": "Internal Server Error", "message": str(e)})
-        }
+        response = build_cors_response(500, {"error": "Internal Server Error", "message": str(e)})
+
+    if 'headers' not in response:
+        response['headers'] = {}
+    response['headers']['Access-Control-Allow-Origin'] = "*"
+    response['headers']['Access-Control-Allow-Methods'] = "GET,POST,PUT,OPTIONS"
+    response['headers']['Access-Control-Allow-Headers'] = "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
+
+    return response
+
+def build_cors_response(status_code, body_dict):
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token"
+        },
+        "body": json.dumps(body_dict)
+    }
 
 def handle_api_gateway(query):
-    print("API Gateway query:", query)
+    print("API Gateway query received:", query)
 
     if not query:
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            },
-            "body": json.dumps([])
-        }
-    
+        return build_cors_response(200, [])  
+
     keywords = [word.strip().lower() for word in query.split() if word.strip()]
     photos = search_photos(keywords)
 
@@ -62,20 +73,14 @@ def handle_api_gateway(query):
         } for photo in photos
     ]
 
-    return {
-        "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-        },
-        "body": json.dumps(results)
-    }
+    return build_cors_response(200, results)
 
 def handle_lex(event):
-    print("Lex input event:", json.dumps(event))
+    print("Lex event received:", json.dumps(event))
 
     keywords = []
     slots = event.get('sessionState', {}).get('intent', {}).get('slots', {})
+
     if slots and 'Label' in slots:
         label_value = slots['Label'].get('value', {}).get('interpretedValue')
         if label_value:
@@ -85,7 +90,7 @@ def handle_lex(event):
         query = event['inputTranscript']
         keywords = [word.strip().lower() for word in query.split() if word.strip()]
 
-    print("Extracted keywords:", keywords)
+    print("Extracted keywords from Lex:", keywords)
 
     if not keywords:
         return build_lex_response([], event, message="No keywords found.")
@@ -112,11 +117,11 @@ def search_photos(keywords):
         }
     }
 
-    print("Full OpenSearch query sent:", json.dumps(search_query))
+    print("OpenSearch query to send:", json.dumps(search_query))
 
     try:
         response = http.request(
-            'GET',
+            'POST',  
             f'https://{host}/{index}/_search',
             body=json.dumps(search_query),
             headers=basic_auth_headers
@@ -127,12 +132,12 @@ def search_photos(keywords):
         result = json.loads(raw_response)
         hits = result.get('hits', {}).get('hits', [])
         photos = [hit['_source'] for hit in hits]
-        print("Photos found:", photos)
+        print("Photos extracted:", photos)
 
         return photos
     
     except Exception as e:
-        print("Error searching OpenSearch:", str(e))
+        print("Error querying OpenSearch:", str(e))
         return []
 
 def build_lex_response(photos, event, message):
